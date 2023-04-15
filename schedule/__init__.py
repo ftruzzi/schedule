@@ -237,6 +237,8 @@ class Job:
         # optional time zone of the self.at_time field. Only relevant when at_time is not None
         self.at_time_zone = None
 
+        self.between_times: Optional[dict[str, datetime.datetime]] = None
+
         # datetime of the last run
         self.last_run: Optional[datetime.datetime] = None
 
@@ -575,6 +577,29 @@ class Job:
         self.latest = latest
         return self
 
+    def between(self, start_str: str, end_str: str):
+        if self.unit != "days":
+            raise ScheduleValueError(
+                "`between()` only works with days"
+            )
+
+        if end_str.count(":") == 1:
+            end_str += ":00"
+
+        end_hour, end_minute, end_second = (int(v) for v in end_str.split(":"))
+
+        self.at(start_str)
+
+        start_time = self.at_time
+        end_time = datetime.time(hour=end_hour, minute=end_minute, second=end_second)
+
+        self.between_times = {
+            "start": start_time,
+            "end": end_time
+        }
+
+        return self
+
     def until(
         self,
         until_time: Union[datetime.datetime, datetime.timedelta, datetime.time, str],
@@ -783,6 +808,11 @@ class Job:
             # Let's see if we will still make that time we specified today
             if (self.next_run - datetime.datetime.now()).days >= 7:
                 self.next_run -= self.period
+        if self.between_times is not None:
+            selected_time = get_random_time_between_times(self.between_times["start"], self.between_times["end"])
+            self.next_run = self.next_run.replace(
+                hour=selected_time.hour, minute=selected_time.minute, second=selected_time.second
+            )
 
     def _is_overdue(self, when: datetime.datetime):
         return self.cancel_after is not None and when > self.cancel_after
@@ -879,3 +909,20 @@ def repeat(job, *args, **kwargs):
         return decorated_function
 
     return _schedule_decorator
+
+
+def get_random_time_between_times(start_time: time, end_time: time) -> time:
+    # adapted from https://codereview.stackexchange.com/a/274228
+    def to_timedelta(t: time) -> datetime.timedelta:
+        return datetime.timedelta(hours=t.hour, minutes=t.minute, seconds=t.second)
+
+    def to_time(seconds: int) -> time:
+        return (datetime.datetime.min + datetime.timedelta(seconds=seconds)).time()
+
+    start_td = to_timedelta(start_time)
+    end_td = to_timedelta(end_time)
+
+    duration = (end_td - start_td).seconds
+    random_offset = random.randint(0, duration)
+
+    return to_time((start_td + datetime.timedelta(seconds=random_offset)).seconds)
